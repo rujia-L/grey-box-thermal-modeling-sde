@@ -37,7 +37,7 @@ Team project:
 
 ## Repo Structure
 ```text
-src/        # modeling scripts (Part 2 & Part 3)
+R-code/        # modeling scripts (Part 2 & Part 3)
 results/    # figures and tables
 report/     # full report (details and additional plots)
-data/       # data notes (and sample data if allowed)
+Dataset/       # data notes (and sample data if allowed)
