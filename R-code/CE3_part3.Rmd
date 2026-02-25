@@ -1,0 +1,715 @@
+
+
+```{r}
+
+load("E:/R/nonlinear/CompEx3_E18/Exercise3.RData")
+
+library(ctsmr)
+
+library(splines)
+
+Hour <- as.numeric(strftime(AllDat$date, format="%H"))
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+sde4room6state_simple <- function(data,
+
+                                  yTi1, yTi2, yTi3, yTi4,
+
+                                  Ph1, Ph2) {
+
+  # data: data.frame，至少包含 Ta, Gv
+
+  # yTi*: 四个房间的测量温度向量，例如 AllDat$yTi1..yTi4
+
+  # Ph1:  房间 1 和 2 共用的暖气功率（例如 AllDat$Ph1）
+
+  # Ph2:  房间 3 和 4 共用的暖气功率（例如 AllDat$Ph2）
+
+
+
+  library(ctsmr)
+
+
+
+  ## ---------- 把输出和输入塞进 data ----------
+
+  data$yTi1 <- yTi1
+
+  data$yTi2 <- yTi2
+
+  data$yTi3 <- yTi3
+
+  data$yTi4 <- yTi4
+
+
+
+  data$Ph1  <- Ph1
+
+  data$Ph2  <- Ph2
+
+
+
+  ## ---------- 定义模型 ----------
+
+  model <- ctsm()
+
+
+
+  # 状态：
+
+  # Ti1, Ti2, Ti3, Ti4: 四个房间空气温度
+
+  # Tw1: 墙体 1（连房间 1,2）
+
+  # Tw2: 墙体 2（连房间 3,4）
+
+
+
+  # ---- 房间 1 ----
+
+  model$addSystem(
+
+    dTi1 ~ 1/Ci * (
+
+      1/Ria * (Ta - Ti1) +           # 对外换热
+
+      1/Riw * (Tw1 - Ti1) +          # 对墙 1 换热
+
+      beta1 * Ph1 +                  # heater 输入，共用 Ph1
+
+      Aw * Gv                        # 统一太阳增益（不再用样条）
+
+    ) * dt + exp(p11) * dw1
+
+  )
+
+
+
+  # ---- 房间 2 ----
+
+  model$addSystem(
+
+    dTi2 ~ 1/Ci * (
+
+      1/Ria * (Ta - Ti2) +
+
+      1/Riw * (Tw1 - Ti2) +          # 对墙 1 换热
+
+      1/R23 * (Ti3 - Ti2) +          # 房间 2 ↔ 3 之间的空气热交换
+
+      beta2 * Ph1 +                  # 也用 Ph1
+
+      Aw * Gv
+
+    ) * dt + exp(p11) * dw2
+
+  )
+
+
+
+  # ---- 房间 3 ----
+
+  model$addSystem(
+
+    dTi3 ~ 1/Ci * (
+
+      1/Ria * (Ta - Ti3) +
+
+      1/Riw * (Tw2 - Ti3) +          # 对墙 2 换热
+
+      1/R23 * (Ti2 - Ti3) +          # 同一个 R23，保证对称
+
+      beta3 * Ph2 +                  # 共用 Ph2
+
+      Aw * Gv
+
+    ) * dt + exp(p11) * dw3
+
+  )
+
+
+
+  # ---- 房间 4 ----
+
+  model$addSystem(
+
+    dTi4 ~ 1/Ci * (
+
+      1/Ria * (Ta - Ti4) +
+
+      1/Riw * (Tw2 - Ti4) +
+
+      beta4 * Ph2 +                  # 共用 Ph2
+
+      Aw * Gv
+
+    ) * dt + exp(p11) * dw4
+
+  )
+
+
+
+  # ---- 墙体 1：连接房间 1 和 2 + 室外 ----
+
+  model$addSystem(
+
+    dTw1 ~ 1/Cw * (
+
+      1/Riw * (Ti1 - Tw1) +
+
+      1/Riw * (Ti2 - Tw1) +
+
+      1/Rwa * (Ta  - Tw1)
+
+    ) * dt + exp(p22) * dw5
+
+  )
+
+
+
+  # ---- 墙体 2：连接房间 3 和 4 + 室外 ----
+
+  model$addSystem(
+
+    dTw2 ~ 1/Cw * (
+
+      1/Riw * (Ti3 - Tw2) +
+
+      1/Riw * (Ti4 - Tw2) +
+
+      1/Rwa * (Ta  - Tw2)
+
+    ) * dt + exp(p22) * dw6
+
+  )
+
+
+
+  # 输入：外温、辐射、两个 heater
+
+  model$addInput(Ta, Gv, Ph1, Ph2)
+
+
+
+  # 观测：四个房间的 Ti
+
+  model$addObs(yTi1 ~ Ti1)
+
+  model$addObs(yTi2 ~ Ti2)
+
+  model$addObs(yTi3 ~ Ti3)
+
+  model$addObs(yTi4 ~ Ti4)
+
+
+
+  # 测量噪声：四个房间共用一个 e11
+
+  model$setVariance(yTi1 ~ exp(e11))
+
+  model$setVariance(yTi2 ~ exp(e11))
+
+  model$setVariance(yTi3 ~ exp(e11))
+
+  model$setVariance(yTi4 ~ exp(e11))
+
+
+
+  ## ---------- 参数设置：尽量共享，数量级参照你单房间模型 ----------
+
+
+
+  # 初始状态
+
+  model$setParameter(Ti1 = c(init = 20, lb = 0,  ub = 40))
+
+  model$setParameter(Ti2 = c(init = 20, lb = 0,  ub = 40))
+
+  model$setParameter(Ti3 = c(init = 20, lb = 0,  ub = 40))
+
+  model$setParameter(Ti4 = c(init = 20, lb = 0,  ub = 40))
+
+  model$setParameter(Tw1 = c(init = 20, lb = 0,  ub = 40))
+
+  model$setParameter(Tw2 = c(init = 20, lb = 0,  ub = 40))
+
+
+
+  # 热容：房间空气（Ci）+ 墙体热质（Cw）
+
+  model$setParameter(Ci  = c(init = 1,    lb = 1e-5, ub = 1e5))
+
+  model$setParameter(Cw  = c(init = 1000, lb = 1e-5, ub = 1e6))
+
+
+
+  # 换热电阻
+
+  model$setParameter(Ria = c(init = 20, lb = 1e-4, ub = 1e5))  # 房间 ↔ 室外
+
+  model$setParameter(Riw = c(init = 10, lb = 1e-4, ub = 1e5))  # 房间 ↔ 墙
+
+  model$setParameter(Rwa = c(init = 30, lb = 1e-4, ub = 1e5))  # 墙 ↔ 室外
+
+
+
+  # 房间 2 ↔ 3 的空气热阻
+
+  model$setParameter(R23 = c(init = 50, lb = 1e-4, ub = 1e5))
+
+
+
+  # 四个房间的 heater gain
+
+  model$setParameter(beta1 = c(init = 1, lb = 0, ub = 100))
+
+  model$setParameter(beta2 = c(init = 1, lb = 0, ub = 100))
+
+  model$setParameter(beta3 = c(init = 1, lb = 0, ub = 100))
+
+  model$setParameter(beta4 = c(init = 1, lb = 0, ub = 100))
+
+
+
+  # 统一太阳增益系数 Aw（不再用样条）
+
+  model$setParameter(Aw   = c(init = 5, lb = 0, ub = 100))
+
+
+
+  # 过程噪声和测量噪声
+
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))   # Ti1..Ti4 共用
+
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))   # Tw1, Tw2 共用
+
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))   # 测量噪声共用
+
+
+
+  ## ---------- 拟合 ----------
+
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+
+  return(fit)
+
+}
+
+
+
+```
+
+
+
+```{r}
+
+fit_4room <- sde4room6state_simple(AllDat, AllDat$yTi1, AllDat$yTi2, AllDat$yTi3, AllDat$yTi4, AllDat$Ph1, AllDat$Ph2)
+
+
+
+
+
+
+
+```
+
+
+
+```{r}
+
+summary(fit_4room)
+
+Pred_4room <- predict(fit_4room)
+
+residuals_fit_4room1 <- Pred_4room[[1]]$state$pred$Ti1 - AllDat$yTi1
+
+residuals_fit_4room2 <- Pred_4room[[1]]$state$pred$Ti2 - AllDat$yTi2
+
+residuals_fit_4room3 <- Pred_4room[[1]]$state$pred$Ti3 - AllDat$yTi3
+
+residuals_fit_4room4 <- Pred_4room[[1]]$state$pred$Ti4 - AllDat$yTi4
+
+plot(residuals_fit_4room1 ~ Hour, 
+
+     main = "Residuals_room1 with Time-Varying Aw", 
+
+     ylab = "Prediction Error (C)",
+
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+
+
+# 加一条 0 线方便观察
+
+abline(h=0, col="red", lwd=2)
+
+
+
+plot(residuals_fit_4room2 ~ Hour, 
+
+     main = "Residuals_room2 with Time-Varying Aw", 
+
+     ylab = "Prediction Error (C)",
+
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+
+
+# 4. 加一条 0 线方便观察
+
+abline(h=0, col="red", lwd=2)
+
+
+
+plot(residuals_fit_4room3 ~ Hour, 
+
+     main = "Residuals_room3 with Time-Varying Aw", 
+
+     ylab = "Prediction Error (C)",
+
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+
+
+# 4. 加一条 0 线方便观察
+
+abline(h=0, col="red", lwd=2)
+
+
+
+plot(residuals_fit_4room4 ~ Hour, 
+
+     main = "Residuals_room4 with Time-Varying Aw", 
+
+     ylab = "Prediction Error (C)",
+
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+
+
+# 4. 加一条 0 线方便观察
+
+abline(h=0, col="red", lwd=2)
+```
+
+
+```{r}
+sde4room6state_Split_FixedE <- function(data,
+                                        yTi1, yTi2, yTi3, yTi4,
+                                        Ph1, Ph2) {
+  
+  library(ctsmr)
+
+  # 1. 数据缩放
+  data$Ph1  <- Ph1 / 1000 
+  data$Ph2  <- Ph2 / 1000
+  data$yTi1 <- yTi1
+  data$yTi2 <- yTi2
+  data$yTi3 <- yTi3
+  data$yTi4 <- yTi4
+
+  model <- ctsm()
+
+  # ---- 状态方程 (引入 Aw_n 和 Aw_s) ----
+  
+  # Room 1 (North) -> Aw_n
+  model$addSystem(
+    dTi1 ~ 1/Ci * (
+      1/Ria * (Ta - Ti1) + 1/Riw * (Tw1 - Ti1) + 
+      beta1 * Ph1 + Aw_n * Gv
+    ) * dt + exp(p11) * dw1
+  )
+  # Room 2 (North) -> Aw_n
+  model$addSystem(
+    dTi2 ~ 1/Ci * (
+      1/Ria * (Ta - Ti2) + 1/Riw * (Tw1 - Ti2) + 
+      1/R23 * (Ti3 - Ti2) + 
+      beta2 * Ph1 + Aw_n * Gv
+    ) * dt + exp(p11) * dw2
+  )
+  # Room 3 (South) -> Aw_s
+  model$addSystem(
+    dTi3 ~ 1/Ci * (
+      1/Ria * (Ta - Ti3) + 1/Riw * (Tw2 - Ti3) + 
+      1/R23 * (Ti2 - Ti3) + 
+      beta3 * Ph2 + Aw_s * Gv
+    ) * dt + exp(p11) * dw3
+  )
+  # Room 4 (South) -> Aw_s
+  model$addSystem(
+    dTi4 ~ 1/Ci * (
+      1/Ria * (Ta - Ti4) + 1/Riw * (Tw2 - Ti4) + 
+      beta4 * Ph2 + Aw_s * Gv
+    ) * dt + exp(p11) * dw4
+  )
+  
+  # Walls (保持不变)
+  model$addSystem(dTw1 ~ 1/Cw * (1/Riw*(Ti1-Tw1) + 1/Riw*(Ti2-Tw1) + 1/Rwa*(Ta-Tw1)) * dt + exp(p22)*dw5)
+  model$addSystem(dTw2 ~ 1/Cw * (1/Riw*(Ti3-Tw2) + 1/Riw*(Ti4-Tw2) + 1/Rwa*(Ta-Tw2)) * dt + exp(p22)*dw6)
+
+  # Inputs & Obs
+  model$addInput(Ta, Gv, Ph1, Ph2)
+  model$addObs(yTi1 ~ Ti1)
+  model$addObs(yTi2 ~ Ti2)
+  model$addObs(yTi3 ~ Ti3)
+  model$addObs(yTi4 ~ Ti4)
+  
+  # Variances
+  model$setVariance(yTi1 ~ exp(e11))
+  model$setVariance(yTi2 ~ exp(e11))
+  model$setVariance(yTi3 ~ exp(e11))
+  model$setVariance(yTi4 ~ exp(e11))
+
+  # ---- 参数设置 ----
+  
+  # 初始状态
+  model$setParameter(Ti1 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti2 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti3 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti4 = c(init=20, lb=0, ub=40))
+  model$setParameter(Tw1 = c(init=20, lb=0, ub=40))
+  model$setParameter(Tw2 = c(init=20, lb=0, ub=40))
+
+  # 物理参数
+  model$setParameter(Ci  = c(init = 5,   lb = 0.1, ub = 100)) 
+  model$setParameter(Cw  = c(init = 50,  lb = 1,   ub = 1000))
+  model$setParameter(Ria = c(init = 10, lb = 1, ub = 200)) 
+  model$setParameter(Riw = c(init = 2,  lb = 0.1, ub = 100)) 
+  model$setParameter(Rwa = c(init = 20, lb = 1, ub = 200)) 
+  model$setParameter(R23 = c(init = 10, lb = 1, ub = 200))
+
+  # Heaters
+  model$setParameter(beta1 = c(init = 0.7, lb = 0, ub = 5))
+  model$setParameter(beta2 = c(init = 0.5, lb = 0, ub = 5))
+  model$setParameter(beta3 = c(init = 0.5, lb = 0, ub = 5))
+  model$setParameter(beta4 = c(init = 0.5, lb = 0, ub = 5))
+
+  # Solar Gains (拆分)
+  model$setParameter(Aw_n   = c(init = 2, lb = 0, ub = 50)) 
+  model$setParameter(Aw_s   = c(init = 8, lb = 0, ub = 50))
+
+  # 噪声参数：关键修改！
+  # 强制 e11 在 -3 附近 (对应标准差约为 0.22度)，不再让它跑到 -27
+  # 如果想更严格，可以使用 fixed = TRUE，但先尝试紧缩边界
+  model$setParameter(p11 = c(init = -1, lb = -15, ub = 10))   
+  model$setParameter(p22 = c(init = -1, lb = -15, ub = 10))   
+  model$setParameter(e11 = c(init = -3, lb = -4,  ub = -2))   
+
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+
+# 运行新模型
+fit_split <- sde4room6state_Split_FixedE(AllDat, AllDat$yTi1, AllDat$yTi2, AllDat$yTi3, AllDat$yTi4, AllDat$Ph1, AllDat$Ph2)
+
+# 查看摘要
+summary(fit_split)
+```
+```{r}
+sde4room6state_WideBounds <- function(data,
+                                      yTi1, yTi2, yTi3, yTi4,
+                                      Ph1, Ph2) {
+  
+  library(ctsmr)
+
+  # 1. 数据缩放
+  data$Ph1  <- Ph1 / 1000 
+  data$Ph2  <- Ph2 / 1000
+  data$yTi1 <- yTi1
+  data$yTi2 <- yTi2
+  data$yTi3 <- yTi3
+  data$yTi4 <- yTi4
+
+  model <- ctsm()
+
+  # ---- 状态方程 ----
+  # Room 1 (North)
+  model$addSystem(dTi1 ~ 1/Ci * (1/Ria*(Ta-Ti1) + 1/Riw*(Tw1-Ti1) + beta1*Ph1 + Aw_n*Gv) * dt + exp(p11)*dw1)
+  # Room 2 (North)
+  model$addSystem(dTi2 ~ 1/Ci * (1/Ria*(Ta-Ti2) + 1/Riw*(Tw1-Ti2) + 1/R23*(Ti3-Ti2) + beta2*Ph1 + Aw_n*Gv) * dt + exp(p11)*dw2)
+  # Room 3 (South)
+  model$addSystem(dTi3 ~ 1/Ci * (1/Ria*(Ta-Ti3) + 1/Riw*(Tw2-Ti3) + 1/R23*(Ti2-Ti3) + beta3*Ph2 + Aw_s*Gv) * dt + exp(p11)*dw3)
+  # Room 4 (South)
+  model$addSystem(dTi4 ~ 1/Ci * (1/Ria*(Ta-Ti4) + 1/Riw*(Tw2-Ti4) + beta4*Ph2 + Aw_s*Gv) * dt + exp(p11)*dw4)
+  
+  # Walls
+  model$addSystem(dTw1 ~ 1/Cw * (1/Riw*(Ti1-Tw1) + 1/Riw*(Ti2-Tw1) + 1/Rwa*(Ta-Tw1)) * dt + exp(p22)*dw5)
+  model$addSystem(dTw2 ~ 1/Cw * (1/Riw*(Ti3-Tw2) + 1/Riw*(Ti4-Tw2) + 1/Rwa*(Ta-Tw2)) * dt + exp(p22)*dw6)
+
+  # Inputs & Obs
+  model$addInput(Ta, Gv, Ph1, Ph2)
+  model$addObs(yTi1 ~ Ti1)
+  model$addObs(yTi2 ~ Ti2)
+  model$addObs(yTi3 ~ Ti3)
+  model$addObs(yTi4 ~ Ti4)
+  
+  model$setVariance(yTi1 ~ exp(e11))
+  model$setVariance(yTi2 ~ exp(e11))
+  model$setVariance(yTi3 ~ exp(e11))
+  model$setVariance(yTi4 ~ exp(e11))
+
+  # ---- 参数设置 (大幅放宽边界) ----
+  
+  # Initial States
+  model$setParameter(Ti1 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti2 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti3 = c(init=20, lb=0, ub=40))
+  model$setParameter(Ti4 = c(init=20, lb=0, ub=40))
+  model$setParameter(Tw1 = c(init=20, lb=0, ub=40))
+  model$setParameter(Tw2 = c(init=20, lb=0, ub=40))
+
+  # 物理参数
+  # Ci 和 Cw 给大一点的空间
+  model$setParameter(Ci  = c(init = 5,   lb = 0.01, ub = 200)) 
+  model$setParameter(Cw  = c(init = 50,  lb = 1,    ub = 2000))
+
+  # 电阻：之前撞到了 200，我们现在放到 1000，看看它是不是真的想要无穷大
+  model$setParameter(Ria = c(init = 50, lb = 1, ub = 1000)) 
+  model$setParameter(Riw = c(init = 5,  lb = 0.1, ub = 500)) 
+  model$setParameter(Rwa = c(init = 20, lb = 1, ub = 1000)) 
+  model$setParameter(R23 = c(init = 10, lb = 1, ub = 1000))
+
+  # Heaters：之前撞到了 5，我们放到 50
+  model$setParameter(beta1 = c(init = 5, lb = 0, ub = 50))
+  model$setParameter(beta2 = c(init = 5, lb = 0, ub = 50))
+  model$setParameter(beta3 = c(init = 5, lb = 0, ub = 50))
+  model$setParameter(beta4 = c(init = 5, lb = 0, ub = 50))
+
+  # Solar Gains：给一个强一点的初值 (init = 10)，引导模型去用它
+  model$setParameter(Aw_n   = c(init = 10, lb = 0, ub = 100)) 
+  model$setParameter(Aw_s   = c(init = 15, lb = 0, ub = 100))
+
+  # Noise (保持 e11 固定在合理区间)
+  model$setParameter(p11 = c(init = -2, lb = -20, ub = 5))   
+  model$setParameter(p22 = c(init = -2, lb = -20, ub = 5))   
+  model$setParameter(e11 = c(init = -3, lb = -5,  ub = -2))   
+
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+
+fit_wide <- sde4room6state_WideBounds(AllDat, AllDat$yTi1, AllDat$yTi2, AllDat$yTi3, AllDat$yTi4, AllDat$Ph1, AllDat$Ph2)
+summary(fit_wide)
+```
+```{r}
+
+# 3. 画出最终的残差图 (报告必须)
+Pred_wide <- predict(fit_wide)
+residuals_1_wide <- Pred_wide[[1]]$state$pred$Ti1 - AllDat$yTi1
+residuals_2_wide <- Pred_wide[[1]]$state$pred$Ti2 - AllDat$yTi2
+residuals_3_wide <- Pred_wide[[1]]$state$pred$Ti3 - AllDat$yTi3 # 选一个南向房间对比
+residuals_4_wide <- Pred_wide[[1]]$state$pred$Ti4 - AllDat$yTi4
+
+par(mfrow = c(2, 2))
+plot(residuals_1_wide ~ Hour, main="Room 1 (North) Final Residuals", 
+     ylab="Error (C)", col=rgb(0,0,1,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+
+plot(residuals_2_wide ~ Hour, main="Room 2 (North) Final Residuals", 
+     ylab="Error (C)", col=rgb(0,0,1,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+
+plot(residuals_3_wide ~ Hour, main="Room 3 (South) Final Residuals", 
+     ylab="Error (C)", col=rgb(0,0,1,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+
+plot(residuals_4_wide ~ Hour, main="Room 4 (South) Final Residuals", 
+     ylab="Error (C)", col=rgb(0,0,1,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+```
+```{r}
+# 1. 重新定义模型，放宽 beta 上限到 100
+sde4room_Final <- function(data, yTi1, yTi2, yTi3, yTi4, Ph1, Ph2) {
+  library(ctsmr)
+  
+  # 数据缩放
+  data$Ph1  <- Ph1 / 1000 
+  data$Ph2  <- Ph2 / 1000
+  data$yTi1 <- yTi1; data$yTi2 <- yTi2; data$yTi3 <- yTi3; data$yTi4 <- yTi4
+
+  model <- ctsm()
+  
+  # System Equations (Standard 6-state)
+  # North
+  model$addSystem(dTi1 ~ 1/Ci * (1/Ria*(Ta-Ti1) + 1/Riw*(Tw1-Ti1) + beta1*Ph1 + Aw_n*Gv) * dt + exp(p11)*dw1)
+  model$addSystem(dTi2 ~ 1/Ci * (1/Ria*(Ta-Ti2) + 1/Riw*(Tw1-Ti2) + 1/R23*(Ti3-Ti2) + beta2*Ph1 + Aw_n*Gv) * dt + exp(p11)*dw2)
+  # South
+  model$addSystem(dTi3 ~ 1/Ci * (1/Ria*(Ta-Ti3) + 1/Riw*(Tw2-Ti3) + 1/R23*(Ti2-Ti3) + beta3*Ph2 + Aw_s*Gv) * dt + exp(p11)*dw3)
+  model$addSystem(dTi4 ~ 1/Ci * (1/Ria*(Ta-Ti4) + 1/Riw*(Tw2-Ti4) + beta4*Ph2 + Aw_s*Gv) * dt + exp(p11)*dw4)
+  # Walls
+  model$addSystem(dTw1 ~ 1/Cw * (1/Riw*(Ti1-Tw1) + 1/Riw*(Ti2-Tw1) + 1/Rwa*(Ta-Tw1)) * dt + exp(p22)*dw5)
+  model$addSystem(dTw2 ~ 1/Cw * (1/Riw*(Ti3-Tw2) + 1/Riw*(Ti4-Tw2) + 1/Rwa*(Ta-Tw2)) * dt + exp(p22)*dw6)
+
+  # Inputs/Obs
+  model$addInput(Ta, Gv, Ph1, Ph2)
+  model$addObs(yTi1 ~ Ti1); model$addObs(yTi2 ~ Ti2); model$addObs(yTi3 ~ Ti3); model$addObs(yTi4 ~ Ti4)
+  model$setVariance(yTi1 ~ exp(e11)); model$setVariance(yTi2 ~ exp(e11)); model$setVariance(yTi3 ~ exp(e11)); model$setVariance(yTi4 ~ exp(e11))
+
+  # Parameters (使用刚才运行得到的最佳值作为初始值，加快收敛)
+  model$setParameter(Ti1=c(init=23, lb=10, ub=40)); model$setParameter(Ti2=c(init=22, lb=10, ub=40))
+  model$setParameter(Ti3=c(init=22, lb=10, ub=40)); model$setParameter(Ti4=c(init=22, lb=10, ub=40))
+  model$setParameter(Tw1=c(init=19, lb=10, ub=40)); model$setParameter(Tw2=c(init=21, lb=10, ub=40))
+
+  model$setParameter(Ci = c(init=0.7, lb=0.01, ub=100))
+  model$setParameter(Cw = c(init=1.0, lb=0.01, ub=100))
+  
+  # 放宽 Beta 上限到 100
+  model$setParameter(beta1=c(init=50, lb=0, ub=100)) 
+  model$setParameter(beta2=c(init=36, lb=0, ub=100))
+  model$setParameter(beta3=c(init=31, lb=0, ub=100))
+  model$setParameter(beta4=c(init=32, lb=0, ub=100))
+  
+  model$setParameter(Aw_n=c(init=0.08, lb=0, ub=20))
+  model$setParameter(Aw_s=c(init=0.27, lb=0, ub=20))
+  
+  model$setParameter(Ria=c(init=400, lb=1, ub=1000))
+  model$setParameter(Riw=c(init=20,  lb=1, ub=100))
+  model$setParameter(Rwa=c(init=44,  lb=1, ub=200))
+  model$setParameter(R23=c(init=26,  lb=1, ub=200))
+  
+  model$setParameter(p11=c(init=-2, lb=-20, ub=5))
+  model$setParameter(p22=c(init=0.1, lb=-20, ub=5))
+  model$setParameter(e11=c(init=-5, lb=-6, ub=-2))
+
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+
+# 2. 运行最终模型
+fit_final <- sde4room_Final(AllDat, AllDat$yTi1, AllDat$yTi2, AllDat$yTi3, AllDat$yTi4, AllDat$Ph1, AllDat$Ph2)
+summary(fit_final)
+
+# 3. 画出最终的残差图 (报告必须)
+Pred_final <- predict(fit_final)
+residuals_1 <- Pred_final[[1]]$state$pred$Ti1 - AllDat$yTi1
+residuals_2 <- Pred_final[[1]]$state$pred$Ti2 - AllDat$yTi2
+residuals_3 <- Pred_final[[1]]$state$pred$Ti3 - AllDat$yTi3 # 选一个南向房间对比
+residuals_4 <- Pred_final[[1]]$state$pred$Ti4 - AllDat$yTi4
+
+par(mfrow=c(2,1), mar=c(4,4,2,1))
+plot(residuals_1 ~ Hour, main="Room 1 (North) Final Residuals", 
+     ylab="Error (C)", col=rgb(0,0,1,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+
+plot(residuals_3 ~ Hour, main="Room 3 (South) Final Residuals", 
+     ylab="Error (C)", col=rgb(1,0,0,0.2), pch=16, ylim=c(-2,2))
+abline(h=0, col="red", lwd=2)
+```
+
+
+
+
+
+
+

@@ -1,0 +1,2186 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+load("C:/Users/Liam/Desktop/Lund/Courses/non-linear time ser/ex3/Exercise3.RData")
+library(ctsmr)
+```
+
+
+
+```{r}
+
+sdeTiTm <- function(data, yTi,Ph){
+  data$yTi <- yTi
+  data$Ph <- Ph
+  # Generate a new object of class ctsm
+  model = ctsm()
+  # Add a system equation and thereby also a state
+  # Gv in Ti: Aw/Ci*Gv or Tm: Aw/Cm*Gv
+  model$addSystem(dTi ~  1/Ci*(1/Ria*(Ta-Ti) + 1/Rim*(Tm-Ti)  + Ph + Aw*Gv)*dt + exp(p11)*dw1)
+  model$addSystem(dTm ~  1/Cm*(1/Rim*(Ti-Tm))*dt + exp(p22)*dw2)
+  # Set the names of the inputs
+  model$addInput(Ta,Gv,Ph)
+  # Set the observation equation: Ti is the state, yTi is the measured output
+  model$addObs(yTi ~ Ti)
+  # Set the variance of the measurement error
+  model$setVariance(yTi ~ exp(e11))
+  ##----------------------------------------------------------------
+  # Set the initial value (for the optimization) of the value of the state at the starting time point
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  ##----------------------------------------------------------------
+  # Set the initial value for the optimization
+  model$setParameter(Ci = c(init = 1, lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm = c(init = 1000, lb = 1E-5, ub = 1E5))
+  model$setParameter(Ria = c(init = 20, lb = 1E-4, ub = 1E5))
+  model$setParameter(Rim = c(init = 20, lb = 1E-4, ub = 1E5))
+  model$setParameter(Aw = c(init = 6, lb = 1E-2, ub = 7.5+4.8+5))
+  model$setParameter(p11 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  ##----------------------------------------------------------------    
+
+  # Run the parameter optimization
+
+  fit = model$estimate(data,firstorder = TRUE)
+  return(fit)
+}
+```
+
+```{r}
+#this is the original estimate of room3
+fit1 <- sdeTiTm(AllDat,AllDat$yTi1,AllDat$Ph1)
+
+summary(fit1,extended=TRUE)
+
+Hour <- as.numeric(strftime(AllDat$date, format="%H"))
+Pred1 <- predict(fit1)
+residuals <- Pred1[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals ~ Hour, 
+     main = "Residuals with constant Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+
+```{r}
+library(splines)
+idx <- (Hour>8 & Hour < 23) # It is impossible to fit a window area for the hours without any sun, so we limit the window area estimation to the hours with sun.
+bs = bs(Hour[idx],df=5,intercept=TRUE) 
+
+# What does the splines look like?
+plot(bs[14:27,1],type='l')
+lines(bs[ 14:27,2])
+lines(bs[ 14:27,3])
+lines(bs[ 14:27,4])
+lines(bs[ 14:27,5])
+
+bs1 <- bs2 <- bs3 <- bs4 <- bs5 <- bs6 <- numeric(dim(AllDat)[1])
+
+bs1[idx] = bs[,1]
+bs2[idx] = bs[,2]
+bs3[idx] = bs[,3]
+bs4[idx] = bs[,4]
+bs5[idx] = bs[,5]
+
+AllDat$bs1 = bs1
+AllDat$bs2 = bs2
+AllDat$bs3 = bs3
+AllDat$bs4 = bs4
+AllDat$bs5 = bs5
+```
+
+
+
+```{r}
+#To build a new function
+sdeTiTm2 <- function(data, yTi,Ph){
+  data$yTi <- yTi
+  data$Ph <- Ph
+  # Generate a new object of class ctsm
+  model = ctsm()
+  # Add a system equation and thereby also a state
+  # Gv in Ti: Aw/Ci*Gv or Tm: Aw/Cm*Gv
+  model$addSystem(dTi ~ 1/Ci * ( 1/Ria*(Ta-Ti) + 1/Rim*(Tm-Ti) + Ph + 
+                  (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5)*Gv )*dt + 
+                  exp(p11)*dw1)
+  model$addSystem(dTm ~  1/Cm*(1/Rim*(Ti-Tm))*dt + exp(p22)*dw2)
+  # Set the names of the inputs
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5)
+  # Set the observation equation: Ti is the state, yTi is the measured output
+  model$addObs(yTi ~ Ti)
+  # Set the variance of the measurement error
+  model$setVariance(yTi ~ exp(e11))
+  ##----------------------------------------------------------------
+  # Set the initial value (for the optimization) of the value of the state at the starting time point
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  ##----------------------------------------------------------------
+  # Set the initial value for the optimization
+  model$setParameter(Ci = c(init = 1, lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm = c(init = 1000, lb = 1E-5, ub = 1E5))
+  model$setParameter(Ria = c(init = 20, lb = 1E-4, ub = 1E5))
+  model$setParameter(Rim = c(init = 20, lb = 1E-4, ub = 1E5))
+
+  model$setParameter(p11 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=100))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=100))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=100))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=100))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=100))
+  ##----------------------------------------------------------------    
+
+  # Run the parameter optimization
+
+  fit = model$estimate(data,firstorder = TRUE)
+  return(fit)
+}
+```
+
+```{r}
+fit2 <- sdeTiTm2(AllDat,AllDat$yTi1,AllDat$Ph1)
+```
+
+```{r}
+summary(fit2,extended=TRUE)
+plot(bs[14:27,1]*fit2$xm["Aw1"] +   
+     bs[14:27,2]*fit2$xm["Aw2"] + 
+     bs[14:27,3]*fit2$xm["Aw3"] + 
+     bs[14:27,4]*fit2$xm["Aw4"] + 
+     bs[14:27,5]*fit2$xm["Aw5"], 
+     type='l', main="Effective Window Area over Time")
+```
+
+
+```{r}
+# 1. 生成预测
+Pred2 <- predict(fit2) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit2 <- Pred2[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit2 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+```{r}
+rmse <- sqrt(mean(residuals_fit2^2, na.rm = TRUE))
+
+# 计算 MAE (平均绝对误差) - 反映平均偏离程度
+mae <- mean(abs(residuals_fit2), na.rm = TRUE)
+
+# ========================================================
+# 6. 模型选择指标计算 (AIC, BIC)
+# ========================================================
+
+# 从 fit10 对象中提取信息
+nll <- fit2$loglik      # 负对数似然 (Negative Log-Likelihood)
+k   <- length(fit2$xm)  # 模型参数的数量
+n   <- length(na.omit(residuals_fit2)) # 有效观测数据的数量
+
+# 计算 AIC 和 BIC (越低越好)
+aic_val <- 2 * k + 2 * nll
+bic_val <- log(n) * k + 2 * nll
+
+# ========================================================
+# 7. 打印评估报告
+# ========================================================
+cat("\n--------------------------------------------\n")
+cat("       Model fit2 评估报告       \n")
+cat("--------------------------------------------\n")
+cat(sprintf("RMSE (均方根误差): %.4f °C\n", rmse))
+cat(sprintf("MAE  (平均绝对误差): %.4f °C\n", mae))
+cat("--------------------------------------------\n")
+cat(sprintf("AIC  (赤池信息量)  : %.2f\n", aic_val))
+cat(sprintf("BIC  (贝叶斯信息量): %.2f\n", bic_val))
+cat(sprintf("LogLikelihood      : %.2f\n", -nll)) # 注意：通常显示 LogLikelihood 为负数形式
+cat("--------------------------------------------\n")
+
+# ========================================================
+# 8. 画自相关图 (ACF) - 检查是否还有残留规律
+# ========================================================
+# 另外开一个窗口或者在原图下方画
+# 如果你想在一张图里同时看残差和ACF，可以取消下面这行的注释
+# par(mfrow=c(2,1)) 
+
+# 画 ACF 图
+acf(residuals_fit2, 
+    lag.max = 24, # 查看过去24小时的相关性
+    na.action = na.pass, 
+    main = "ACF of Residuals (fit2)")
+```
+
+
+
+
+下面把bs调到8个试试，时间从8到10pm试试
+
+
+
+
+
+```{r}
+library(splines)
+Hour <- as.numeric(strftime(AllDat$date, format="%H"))
+# 1. 修改时间窗口：8:00 到 22:00 (包含22点)
+idx <- (Hour >= 8 & Hour <= 22) 
+
+# 2. 修改样条数量：df 改为 8
+bs = bs(Hour[idx], df=8, intercept=TRUE) 
+
+# --- 可视化检查 (可选) ---
+# 既然有8个样条，我们可以画一下看看形状
+# 注意：这里取一部分数据画图，只要索引不越界即可
+plot_idx <- 14:40 # 随便取一段连续的索引
+if(max(plot_idx) <= nrow(bs)) {
+  plot(bs[plot_idx, 1], type='l', ylim=c(0,1), main="Visualizing 8 Splines", ylab="Value")
+  for(i in 2:8) { lines(bs[plot_idx, i], col=i) }
+}
+
+# 3. 初始化 8 个全零向量 (注意增加了 bs6, bs7, bs8)
+bs1 <- bs2 <- bs3 <- bs4 <- bs5 <- bs6 <- bs7 <- bs8 <- numeric(dim(AllDat)[1])
+
+# 4. 填入计算好的样条值
+bs1[idx] = bs[,1]
+bs2[idx] = bs[,2]
+bs3[idx] = bs[,3]
+bs4[idx] = bs[,4]
+bs5[idx] = bs[,5]
+bs6[idx] = bs[,6] # 新增
+bs7[idx] = bs[,7] # 新增
+bs8[idx] = bs[,8] # 新增
+
+# 5. 将新变量写入数据集 AllDat
+AllDat$bs1 = bs1
+AllDat$bs2 = bs2
+AllDat$bs3 = bs3
+AllDat$bs4 = bs4
+AllDat$bs5 = bs5
+AllDat$bs6 = bs6 # 新增
+AllDat$bs7 = bs7 # 新增
+AllDat$bs8 = bs8 # 新增
+
+# -----------------------------------------------------------
+# ⚠️ 接下来的步骤 (口头提示，你需要去修改你的函数文件)：
+# -----------------------------------------------------------
+# 在你的 sdeTiTmAv 函数中，你需要做以下修改：
+# 1. model$addSystem(dTi ~ ... + (Aw1*bs1 + ... + Aw8*bs8)*Gv ...)
+# 2. model$addInput(..., bs6, bs7, bs8)
+# 3. model$setParameter(Aw6 = ...), Aw7 = ..., Aw8 = ...)
+
+```
+
+这是换成8个spline
+
+```{r}
+sdeTiTm3 <- function(data, yTi,Ph){
+  data$yTi <- yTi
+  data$Ph <- Ph
+  # Generate a new object of class ctsm
+  model = ctsm()
+  # Add a system equation and thereby also a state
+  # Gv in Ti: Aw/Ci*Gv or Tm: Aw/Cm*Gv
+  model$addSystem(dTi ~ 1/Ci * ( 1/Ria*(Ta-Ti) + 1/Rim*(Tm-Ti) + Ph + 
+                  (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5+ Aw6*bs6+ Aw7*bs7+ Aw8*bs8)*Gv )*dt + 
+                  exp(p11)*dw1)
+  model$addSystem(dTm ~  1/Cm*(1/Rim*(Ti-Tm))*dt + exp(p22)*dw2)
+  # Set the names of the inputs
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5,bs6,bs7,bs8)
+  # Set the observation equation: Ti is the state, yTi is the measured output
+  model$addObs(yTi ~ Ti)
+  # Set the variance of the measurement error
+  model$setVariance(yTi ~ exp(e11))
+  ##----------------------------------------------------------------
+  # Set the initial value (for the optimization) of the value of the state at the starting time point
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  ##----------------------------------------------------------------
+  # Set the initial value for the optimization
+  model$setParameter(Ci = c(init = 1, lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm = c(init = 1000, lb = 1E-5, ub = 1E5))
+  model$setParameter(Ria = c(init = 20, lb = 1E-4, ub = 1E5))
+  model$setParameter(Rim = c(init = 20, lb = 1E-4, ub = 1E5))
+
+  model$setParameter(p11 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1, lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw6 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw7 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw8 = c(init=5, lb=0, ub=25))
+  ##----------------------------------------------------------------    
+
+  # Run the parameter optimization
+
+  fit = model$estimate(data,firstorder = TRUE)
+  return(fit)
+}
+
+```
+
+
+```{r}
+fit3 <- sdeTiTm3(AllDat,AllDat$yTi1,AllDat$Ph1)
+summary(fit3,extended=TRUE)
+# 1. 确定我们要画哪一段数据 (取第一天的数据即可)
+# 你的时间窗口是 8:00 - 22:00，总共 15 个小时
+```
+
+```{r}
+# 1. 提取所有符合条件的小时序列
+all_valid_hours <- Hour[idx]
+
+# 2. 找到第一个 "8点" 出现的位置
+# 这就是某一天早晨开始的地方
+start_index <- which(all_valid_hours == 8)[1]
+
+# 3. 取出从这个 8 点开始的连续 15 个小时 (8:00 - 22:00)
+# 假设我们要画 15 个小时长度
+plot_slice <- start_index:(start_index + 14)
+
+# 4. 准备画图数据
+x_plot <- all_valid_hours[plot_slice]
+
+# 重新计算对应的 y 值 (Aw 曲线)
+# 注意：我们要从 bs 矩阵的对应行取值
+# bs 矩阵的行号也要对应 idx 的逻辑，这里直接用 plot_slice 是基于 idx 筛选后的子集索引
+y_plot <- bs[plot_slice, 1] * fit3$xm["Aw1"] + 
+          bs[plot_slice, 2] * fit3$xm["Aw2"] + 
+          bs[plot_slice, 3] * fit3$xm["Aw3"] + 
+          bs[plot_slice, 4] * fit3$xm["Aw4"] + 
+          bs[plot_slice, 5] * fit3$xm["Aw5"] + 
+          bs[plot_slice, 6] * fit3$xm["Aw6"] + 
+          bs[plot_slice, 7] * fit3$xm["Aw7"] + 
+          bs[plot_slice, 8] * fit3$xm["Aw8"]
+
+# 5. 打印检查一下 X 轴，确保是 8, 9, ... 22
+print(x_plot) 
+
+# 6. 画图
+plot(x_plot, y_plot, 
+     type = 'l', lwd = 2, col = "blue",
+     main = "Effective Window Area (Corrected Day Profile)",
+     xlab = "Hour of Day", ylab = "Effective Area (m2)")
+grid()
+```
+
+
+
+
+
+```{r}
+Pred3 <- predict(fit3) 
+
+# 2. 计算残差
+
+residuals_fit3 <- Pred3[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit3 ~ Hour, 
+     main = "Residuals with 8-spines Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+comment：Aw1，Aw2总是撞墙，不可信，Aw7，8时间段根本没有太阳，反而变大，不可信，残差基本没有提升
+根据提示，下面我们修改一下公式，让太阳光热量大部分进入到热质，少部分加热空气，希望可以不要早上Aw爆炸
+下面建立个新fit4
+
+```{r}
+sdeTiTm4 <- function(data, yTi, Ph){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  # --- 1. 建立模型 ---
+  model <- ctsm()
+  
+  # --- 2. 定义太阳能样条的总和 (为了代码整洁，先定义成一个字符串变量也是可以的，但这里直接写进公式) ---
+  # 太阳能项 = (Aw1*bs1 + ... + Aw8*bs8) * Gv
+  
+  # --- 3. 修改系统方程 (核心修改) ---
+  
+  # dTi (空气): 
+  # 增加 p_solar 系数。只有 p_solar 比例的太阳能直接加热空气。
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      Ph + 
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体/热质): 
+  # 增加太阳能项！接收剩余的 (1-p_solar) 比例的太阳能。
+  # 注意：这里除以的是 Cm (墙体热容)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1-p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 4. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, bs6, bs7, bs8)
+  
+  # --- 5. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 6. 参数设置 ---
+  # 状态初值
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 1,    lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm  = c(init = 1000, lb = 1E-5, ub = 1E5))
+  model$setParameter(Ria = c(init = 20,   lb = 1E-4, ub = 1E5))
+  model$setParameter(Rim = c(init = 20,   lb = 1E-4, ub = 1E5))
+  
+  # 🆕 新参数：p_solar (太阳能分配比例)
+  # 初始猜测 0.2 (20%给空气，80%给墙)，范围 0 到 1
+  model$setParameter(p_solar = c(init = 0.2, lb = 0, ub = 1))
+
+  # 噪声参数
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  
+  # Aw 样条系数 (保持 ub=25 的限制)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw6 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw7 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw8 = c(init=5, lb=0, ub=25))
+
+  # --- 7. 运行优化 ---
+  fit = model$estimate(data, firstorder = TRUE)
+  return(fit)
+}
+```
+
+
+```{r}
+fit4 <- sdeTiTm4(AllDat, AllDat$yTi1, AllDat$Ph1)
+summary(fit4)
+```
+
+输出告诉我p_solar = 0.99853，表示阳光全给到了空气，这显然是扯淡，下面我们要强行干预一下，把阳光全给到墙壁试试
+设置p_solar约等于0
+
+
+
+
+```{r}
+sdeTiTm5 <- function(data, yTi, Ph){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  # --- 1. 建立模型 ---
+  model <- ctsm()
+  
+  # --- 2. 定义太阳能样条的总和 (为了代码整洁，先定义成一个字符串变量也是可以的，但这里直接写进公式) ---
+  # 太阳能项 = (Aw1*bs1 + ... + Aw8*bs8) * Gv
+  
+  # --- 3. 修改系统方程 (核心修改) ---
+  
+  # dTi (空气): 
+  # 增加 p_solar 系数。只有 p_solar 比例的太阳能直接加热空气。
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      Ph + 
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体/热质): 
+  # 增加太阳能项！接收剩余的 (1-p_solar) 比例的太阳能。
+  # 注意：这里除以的是 Cm (墙体热容)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1-p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 4. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, bs6, bs7, bs8)
+  
+  # --- 5. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 6. 参数设置 ---
+  # 状态初值
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 1,    lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm  = c(init = 1000, lb = 1E-5, ub = 1E5))
+  model$setParameter(Ria = c(init = 20,   lb = 1E-4, ub = 1E5))
+  model$setParameter(Rim = c(init = 20,   lb = 1E-4, ub = 1E5))
+  
+  # 🆕 新参数：p_solar (太阳能分配比例)
+  # 初始猜测 0.2 (20%给空气，80%给墙)，范围 0 到 1
+  model$setParameter(p_solar = c(init=0.0001, lb=0, ub=0.001))
+
+  # 噪声参数
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  
+  # Aw 样条系数 (保持 ub=25 的限制)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw6 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw7 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw8 = c(init=5, lb=0, ub=25))
+
+  # --- 7. 运行优化 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit5 <- sdeTiTm5(AllDat, AllDat$yTi1, AllDat$Ph1)
+summary(fit5)
+```
+
+```{r}
+Pred5 <- predict(fit5) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit5 <- Pred5[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit5 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+现在限制光全部进到墙里，墙有点受不住成了敏感肌。可以看到墙体热容 Cm “崩塌了，之前Cm 大概 85,000 (厚实的混凝土墙)，现在是60，变成纸糊墙，失去了蓄热能力，温度一晒就热，一冷就凉。
+此外太阳参数也消失了，Aw3-8都变成0，模型发现：既然墙壁 ($Cm$) 变得这么小，一旦有太阳 ($Aw > 0$) 照在上面，墙壁温度 ($Tm$) 就会瞬间爆炸式升高。
+为了防止温度失控，优化器干脆把白天的窗户全关了 ($Aw=0$)，拒绝太阳热量进入，为了让 $Tm$ 迅速升温并加热 $Ti$，模型被迫把 $Cm$ 缩小了 1000 倍（从 8万变成 60）。这样一来，$Tm$ 就失去了“热惯性”，变得反应极快。
+
+
+下面，我们限制阳光必须照到墙上，并且墙一定要是厚墙！
+
+
+```{r}
+sdeTiTm6 <- function(data, yTi, Ph){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  # --- 1. 建立模型 ---
+  model <- ctsm()
+  
+  # --- 2. 定义太阳能样条的总和 (为了代码整洁，先定义成一个字符串变量也是可以的，但这里直接写进公式) ---
+  # 太阳能项 = (Aw1*bs1 + ... + Aw8*bs8) * Gv
+  
+  # --- 3. 修改系统方程 (核心修改) ---
+  
+  # dTi (空气): 
+  # 增加 p_solar 系数。只有 p_solar 比例的太阳能直接加热空气。
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      Ph + 
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体/热质): 
+  # 增加太阳能项！接收剩余的 (1-p_solar) 比例的太阳能。
+  # 注意：这里除以的是 Cm (墙体热容)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1-p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5 + Aw6*bs6 + Aw7*bs7 + Aw8*bs8) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 4. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, bs6, bs7, bs8)
+  
+  # --- 5. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 6. 参数设置 ---
+  # 状态初值
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 1,    lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm = c(init=85000, lb=50000, ub=150000))
+  model$setParameter(Ria = c(init=12, lb=10, ub=20))
+  model$setParameter(Rim = c(init = 20,   lb = 1E-4, ub = 1E5))
+  
+  # 🆕 新参数：p_solar (太阳能分配比例)
+  # 初始猜测 0.2 (20%给空气，80%给墙)，范围 0 到 1
+  model$setParameter(p_solar = c(init=0.1, lb=0, ub=0.2))
+
+  # 噪声参数
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  
+  # Aw 样条系数 (保持 ub=25 的限制)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw6 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw7 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw8 = c(init=5, lb=0, ub=25))
+
+  # --- 7. 运行优化 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit6 <- sdeTiTm6(AllDat, AllDat$yTi1, AllDat$Ph1)
+summary(fit6)
+```
+
+
+```{r}
+Pred6 <- predict(fit6) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit6 <- Pred6[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit6 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+难道是我df选的太多了吗？导致了多重共线性？这里我把环境情况，重新用df为5试一试
+
+```{r}
+library(splines)
+idx <- (Hour>8 & Hour < 23) # It is impossible to fit a window area for the hours without any sun, so we limit the window area estimation to the hours with sun.
+bs = bs(Hour[idx],df=5,intercept=TRUE) 
+
+# What does the splines look like?
+plot(bs[14:27,1],type='l')
+lines(bs[ 14:27,2])
+lines(bs[ 14:27,3])
+lines(bs[ 14:27,4])
+lines(bs[ 14:27,5])
+
+bs1 <- bs2 <- bs3 <- bs4 <- bs5 <- bs6 <- numeric(dim(AllDat)[1])
+
+bs1[idx] = bs[,1]
+bs2[idx] = bs[,2]
+bs3[idx] = bs[,3]
+bs4[idx] = bs[,4]
+bs5[idx] = bs[,5]
+
+AllDat$bs1 = bs1
+AllDat$bs2 = bs2
+AllDat$bs3 = bs3
+AllDat$bs4 = bs4
+AllDat$bs5 = bs5
+```
+
+
+```{r}
+sdeTiTm7 <- function(data, yTi, Ph){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  # --- 1. 建立模型 ---
+  model <- ctsm()
+  
+  # --- 2. 定义太阳能样条的总和 (为了代码整洁，先定义成一个字符串变量也是可以的，但这里直接写进公式) ---
+  # 太阳能项 = (Aw1*bs1 + ... + Aw8*bs8) * Gv
+  
+  # --- 3. 修改系统方程 (核心修改) ---
+  
+  # dTi (空气): 
+  # 增加 p_solar 系数。只有 p_solar 比例的太阳能直接加热空气。
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      Ph + 
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体/热质): 
+  # 增加太阳能项！接收剩余的 (1-p_solar) 比例的太阳能。
+  # 注意：这里除以的是 Cm (墙体热容)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1-p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 4. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5)
+  
+  # --- 5. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 6. 参数设置 ---
+  # 状态初值
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 1,    lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm = c(init=85000, lb=50000, ub=150000))
+  model$setParameter(Ria = c(init=12, lb=10, ub=20))
+  model$setParameter(Rim = c(init = 20,   lb = 1E-4, ub = 1E5))
+  
+  # 🆕 新参数：p_solar (太阳能分配比例)
+  # 初始猜测 0.2 (20%给空气，80%给墙)，范围 0 到 1
+  model$setParameter(p_solar = c(init=0.5, lb=0.1, ub=0.9))
+
+  # 噪声参数
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+  
+  # Aw 样条系数 (保持 ub=25 的限制)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+
+
+  # --- 7. 运行优化 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+```{r}
+fit7 <- sdeTiTm7(AllDat, AllDat$yTi1, AllDat$Ph1)
+summary(fit7)
+```
+
+
+```{r}
+Pred7 <- predict(fit7) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit7 <- Pred7[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit7 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+没有变化，遗憾离场
+下面我们假设9点，10点左右由学生上课带来了系统性偏差，我们考虑这个
+
+```{r}
+# 1. 确保 Hour 变量存在 (如果之前没定义)
+Hour <- as.numeric(strftime(AllDat$date, format="%H"))
+
+# 2. 定义学生在校时间：9:00 到 16:00 (含16点)
+# 也就是 09:00 - 16:59 这段时间认为有人
+AllDat$Occupancy <- ifelse(Hour >= 10 & Hour <= 16, 1, 0)
+
+# 3. 检查一下有多少个数据点被标记为 1
+table(AllDat$Occupancy)
+# 你应该能看到有一批数据变成了 1
+```
+
+```{r}
+sdeTiTm8 <- function(data, yTi, Ph, Occupancy){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  data$Occupancy <- Occupancy # 存入数据
+  
+  model <- ctsm()
+  
+  # --- 系统方程 ---
+  
+  # dTi (空气): 
+  # 增加项： + Q_occ * Occupancy
+  # 只有当 Occupancy=1 (9点-16点) 时，这项才生效
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      Ph + 
+      Q_occ * Occupancy +  # <--- 学生产生的额外热量 (kW)
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体): 
+  # 接收大部分太阳能 (1-p_solar)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1-p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 输入变量 ---
+  # 记得把 Occupancy 加进去
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, Occupancy) 
+  
+  # --- 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数 (使用你之前验证过的合理范围)
+  model$setParameter(Ci  = c(init = 8.5,  lb = 1E-5, ub = 1E5))
+  
+  # ⚠️ 关键：强制 Cm 为大数值 (墙体蓄热)，防止它崩塌
+  model$setParameter(Cm  = c(init=130000, lb=50000, ub=200000)) 
+  
+  model$setParameter(Ria = c(init=12, lb=8, ub=20))
+  model$setParameter(Rim = c(init=0.5, lb=0.1, ub=10))
+  
+  # 🆕 新参数：Q_occ (学生热功率)
+  # 范围设为 -2 到 10 kW。允许负值是为了防止某种反直觉情况（如开窗散热大于人体发热）
+  model$setParameter(Q_occ = c(init = 1, lb = -2, ub = 10))
+
+  # 太阳参数：强制大部分进墙 (p_solar 接近 0)
+  model$setParameter(p_solar = c(init=0.5, lb=0, ub=0.99))
+  
+  # 样条系数 (限制在 25 以内)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 运行 ---
+  # 使用 capture.output 隐藏中间刷屏
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+# 运行模型
+fit8 <- sdeTiTm8(AllDat, AllDat$yTi1, AllDat$Ph1, AllDat$Occupancy)
+
+# 查看结果
+summary(fit8)
+```
+
+```{r}
+Pred8 <- predict(fit8) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit8 <- Pred8[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit8 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+
+下面我们不要让阳光的热量分散到热质量了，我们让取暖器的热量分散到空气和热质，这次再来试试：
+
+```{r}
+sdeTiTm9 <- function(data, yTi, Ph, Occupancy){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  data$Occupancy <- Occupancy
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  
+  # dTi (空气): 
+  # - 太阳能 (Aw*Gv): 全部回来这里 (默认设置)
+  # - 加热器 (Ph): 乘以 p_ph (只有一部分直接加热空气)
+  # - 学生热量 (Q_occ): 继续保留
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph +  # <--- 修改点：暖气被拆分了
+      Q_occ * Occupancy + 
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv # <--- 修改点：太阳能全部回归空气
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体/热质): 
+  # - 加热器 (Ph): 接收剩余的 (1-p_ph)
+  # - 太阳能: 移除
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph # <--- 修改点：暖气余热进墙
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, Occupancy)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 8.5,  lb = 1E-5, ub = 1E5))
+  # 依然建议锁住 Cm，因为它现在承担了暖气蓄热的功能
+  model$setParameter(Cm  = c(init=130000, lb=50000, ub=200000)) 
+  model$setParameter(Ria = c(init=12, lb=8, ub=20))
+  model$setParameter(Rim = c(init=0.5, lb=0.1, ub=10))
+  
+  # 学生热量
+  model$setParameter(Q_occ = c(init = 1, lb = -2, ub = 10))
+
+  # 🆕 新参数：p_ph (暖气分配比例)
+  # 范围 0-1。
+  # 猜测：暖气片大部分是加热空气的，但有延迟。
+  # init=0.5: 假设 50% 快热，50% 慢热
+  model$setParameter(p_ph = c(init=0.5, lb=0, ub=1))
+  
+  # 太阳参数 (Aw)
+  # 注意：因为现在太阳全给空气了，早晨 Gv 微弱时 Aw 可能又会想撞墙
+  # 务必保持 ub=25 的限制
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit9 <- sdeTiTm9(AllDat, AllDat$yTi1, AllDat$Ph1, AllDat$Occupancy)
+
+# 查看结果
+summary(fit9)
+```
+
+
+
+```{r}
+Pred9 <- predict(fit9) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit9 <- Pred9[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit9 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+```{r}
+# 计算 RMSE (均方根误差) - 反映预测偏差的大小
+rmse <- sqrt(mean(residuals_fit9^2, na.rm = TRUE))
+
+# 计算 MAE (平均绝对误差) - 反映平均偏离程度
+mae <- mean(abs(residuals_fit9), na.rm = TRUE)
+
+# ========================================================
+# 6. 模型选择指标计算 (AIC, BIC)
+# ========================================================
+
+# 从 fit10 对象中提取信息
+nll <- fit10$loglik      # 负对数似然 (Negative Log-Likelihood)
+k   <- length(fit9$xm)  # 模型参数的数量
+n   <- length(na.omit(residuals_fit9)) # 有效观测数据的数量
+
+# 计算 AIC 和 BIC (越低越好)
+aic_val <- 2 * k + 2 * nll
+bic_val <- log(n) * k + 2 * nll
+
+# ========================================================
+# 7. 打印评估报告
+# ========================================================
+cat("\n--------------------------------------------\n")
+cat("       Model fit9 评估报告       \n")
+cat("--------------------------------------------\n")
+cat(sprintf("RMSE (均方根误差): %.4f °C\n", rmse))
+cat(sprintf("MAE  (平均绝对误差): %.4f °C\n", mae))
+cat("--------------------------------------------\n")
+cat(sprintf("AIC  (赤池信息量)  : %.2f\n", aic_val))
+cat(sprintf("BIC  (贝叶斯信息量): %.2f\n", bic_val))
+cat(sprintf("LogLikelihood      : %.2f\n", -nll)) # 注意：通常显示 LogLikelihood 为负数形式
+cat("--------------------------------------------\n")
+
+# ========================================================
+# 8. 画自相关图 (ACF) - 检查是否还有残留规律
+# ========================================================
+# 另外开一个窗口或者在原图下方画
+# 如果你想在一张图里同时看残差和ACF，可以取消下面这行的注释
+# par(mfrow=c(2,1)) 
+
+# 画 ACF 图
+acf(residuals_fit9, 
+    lag.max = 24, # 查看过去24小时的相关性
+    na.action = na.pass, 
+    main = "ACF of Residuals (fit9)")
+
+```
+
+
+
+
+
+学生影响加入diffusion
+
+```{r}
+sdeTiTm10 <- function(data, yTi, Ph, Occupancy){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  data$Occupancy <- Occupancy
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  
+  # dTi (空气): 
+  # - 太阳能 (Aw*Gv): 全部回来这里 (默认设置)
+  # - 加热器 (Ph): 乘以 p_ph (只有一部分直接加热空气)
+  # - 学生热量 (Q_occ): 继续保留
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph +  # <--- 修改点：暖气被拆分了
+      Q_occ * Occupancy + 
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv # <--- 修改点：太阳能全部回归空气
+    )*dt + exp(p11 + p_stu_noise * Occupancy)*dw1)
+  
+  # dTm (墙体/热质): 
+  # - 加热器 (Ph): 接收剩余的 (1-p_ph)
+  # - 太阳能: 移除
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph # <--- 修改点：暖气余热进墙
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, Occupancy)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 8.5,  lb = 1E-5, ub = 1E5))
+  # 依然建议锁住 Cm，因为它现在承担了暖气蓄热的功能
+  model$setParameter(Cm  = c(init=130000, lb=50000, ub=200000)) 
+  model$setParameter(Ria = c(init=12, lb=8, ub=20))
+  model$setParameter(Rim = c(init=0.5, lb=0.1, ub=10))
+  
+  # 学生热量
+  model$setParameter(Q_occ = c(init = 1, lb = -2, ub = 10))
+
+  # 🆕 新参数：p_ph (暖气分配比例)
+  # 范围 0-1。
+  # 猜测：暖气片大部分是加热空气的，但有延迟。
+  # init=0.5: 假设 50% 快热，50% 慢热
+  model$setParameter(p_ph = c(init=0.5, lb=0, ub=1))
+  
+  # 太阳参数 (Aw)
+  # 注意：因为现在太阳全给空气了，早晨 Gv 微弱时 Aw 可能又会想撞墙
+  # 务必保持 ub=25 的限制
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  # 初始值设为 0 (假设没影响)，范围允许正负
+  model$setParameter(p_stu_noise = c(init = 0, lb = -5, ub = 5))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit10 <- sdeTiTm10(AllDat, AllDat$yTi1, AllDat$Ph1, AllDat$Occupancy)
+
+# 查看结果
+summary(fit10)
+```
+
+
+
+
+
+```{r}
+Pred10 <- predict(fit10) # 假设你的新模型叫 fit2
+
+# 2. 计算残差
+# 注意：Pred2[[1]] 对应第一段数据
+residuals_fit10 <- Pred10[[1]]$state$pred$Ti - AllDat$yTi1
+
+# 3. 画图 (对比 Hour)
+plot(residuals_fit10 ~ Hour, 
+     main = "Residuals with Time-Varying Aw", 
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便和之前的图对比
+
+# 4. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+```{r}
+# ========================================================
+# 5. 定量评估指标计算 (RMSE, MAE)
+# ========================================================
+
+# 计算 RMSE (均方根误差) - 反映预测偏差的大小
+rmse <- sqrt(mean(residuals_fit10^2, na.rm = TRUE))
+
+# 计算 MAE (平均绝对误差) - 反映平均偏离程度
+mae <- mean(abs(residuals_fit10), na.rm = TRUE)
+
+# ========================================================
+# 6. 模型选择指标计算 (AIC, BIC)
+# ========================================================
+
+# 从 fit10 对象中提取信息
+nll <- fit10$loglik      # 负对数似然 (Negative Log-Likelihood)
+k   <- length(fit10$xm)  # 模型参数的数量
+n   <- length(na.omit(residuals_fit10)) # 有效观测数据的数量
+
+# 计算 AIC 和 BIC (越低越好)
+aic_val <- 2 * k + 2 * nll
+bic_val <- log(n) * k + 2 * nll
+
+# ========================================================
+# 7. 打印评估报告
+# ========================================================
+cat("\n--------------------------------------------\n")
+cat("       Model fit10 评估报告       \n")
+cat("--------------------------------------------\n")
+cat(sprintf("RMSE (均方根误差): %.4f °C\n", rmse))
+cat(sprintf("MAE  (平均绝对误差): %.4f °C\n", mae))
+cat("--------------------------------------------\n")
+cat(sprintf("AIC  (赤池信息量)  : %.2f\n", aic_val))
+cat(sprintf("BIC  (贝叶斯信息量): %.2f\n", bic_val))
+cat(sprintf("LogLikelihood      : %.2f\n", -nll)) # 注意：通常显示 LogLikelihood 为负数形式
+cat("--------------------------------------------\n")
+
+# ========================================================
+# 8. 画自相关图 (ACF) - 检查是否还有残留规律
+# ========================================================
+# 另外开一个窗口或者在原图下方画
+# 如果你想在一张图里同时看残差和ACF，可以取消下面这行的注释
+# par(mfrow=c(2,1)) 
+
+# 画 ACF 图
+acf(residuals_fit10, 
+    lag.max = 24, # 查看过去24小时的相关性
+    na.action = na.pass, 
+    main = "ACF of Residuals (fit10)")
+
+# 恢复绘图布局
+# par(mfrow=c(1,1))
+```
+
+```{r}
+# ========================================================
+# ========================================================
+Pred10 <- predict(fit10)
+y_pred <- Pred10[[1]]$state$pred$Ti
+y_obs  <- AllDat$yTi1
+time_axis <- AllDat$date
+
+# 筛选 2015年2月1日 到 2月7日
+start_time <- as.POSIXct("2015-02-06 00:00:00", tz="UTC")
+end_time   <- as.POSIXct("2015-02-06 23:59:59", tz="UTC")
+idx_plot   <- which(time_axis >= start_time & time_axis <= end_time)
+
+# ========================================================
+# 2. 画图 (Blue Line vs Red Line)
+# ========================================================
+# 先画观测值 (Observation) -> 蓝色粗线
+plot(time_axis[idx_plot], y_obs[idx_plot], 
+     type = 'l',           # l = line (线)
+     lwd = 3,              # 线宽设为 3 (粗一点作为背景)
+     col = "blue",         # 蓝色
+     xlab = "Date", 
+     ylab = "Temperature (°C)",
+     main = "Model Prediction vs. Observation (Feb 1 - Feb 7)",
+     ylim = c(min(y_obs[idx_plot]), max(y_obs[idx_plot])))
+
+# 再画预测值 (Prediction) -> 红色细线
+lines(time_axis[idx_plot], y_pred[idx_plot], 
+      col = "red",         # 红色
+      lwd = 2,             # 线宽设为 2 (稍微细一点)
+      lty = 1)             # 实线 (如果想看透视效果，可以改 lty=2 虚线)
+
+# ========================================================
+# 3. 添加图例和网格
+# ========================================================
+grid() # 加网格
+
+legend("topright", 
+       legend = c("Observation (Real)", "Prediction (Model)"),
+       col = c("blue", "red"),
+       lty = c(1, 1),      # 都是实线
+       lwd = c(3, 2),      # 粗细对应
+       bg = "white")       # 图例背景设为白色，防止挡住线条
+```
+
+```{r}
+# 1. 确保时间格式正确 (假设时区是 UTC，根据你的数据调整)
+AllDat$date <- as.POSIXct(AllDat$date, tz="UTC") 
+
+# 2. 定义时间范围 (2015.1.13 - 2015.3.25)
+start_date <- as.POSIXct("2015-01-13 00:00:00", tz="UTC")
+end_date   <- as.POSIXct("2015-03-25 23:59:59", tz="UTC")
+
+# 3. 提取索引
+idx_subset <- which(AllDat$date >= start_date & AllDat$date <= end_date)
+
+# 4. 创建子数据集 (包含所有列：yTi1, Ph1, bs1-bs5 等)
+Data_Subset <- AllDat[idx_subset, ]
+
+# 检查一下数据量
+print(paste("Selected rows:", nrow(Data_Subset)))
+```
+
+
+
+```{r}
+sdeTiTm11 <- function(data, yTi, Ph){ # <--- 删掉了 Occupancy 参数
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  
+  # dTi (空气): 
+  # - 太阳能: 全部在这里
+  # - 暖气: p_ph 比例在这里
+  # - ❌ 删除了 Q_occ * Occupancy
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph +  # 保留暖气拆分
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体): 
+  # - 暖气: (1-p_ph) 比例在这里
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  # ❌ 删除了 Occupancy
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数
+  model$setParameter(Ci  = c(init = 8.5,  lb = 1E-5, ub = 1E5))
+  # 锁住 Cm 防止崩塌 (这是之前的经验)
+  model$setParameter(Cm  = c(init=130000, lb=50000, ub=200000)) 
+  model$setParameter(Ria = c(init=12, lb=8, ub=20))
+  model$setParameter(Rim = c(init=0.5, lb=0.1, ub=10))
+  
+  # ❌ 删除了 Q_occ 设置
+
+  # 暖气分配比例
+  model$setParameter(p_ph = c(init=0.5, lb=0, ub=1))
+  
+  # 太阳参数 (Aw) - 限制 ub=25
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+# 运行模型
+fit11 <- sdeTiTm11(Data_Subset, Data_Subset$yTi1, Data_Subset$Ph1)
+
+# 查看结果
+summary(fit11)
+```
+
+
+```{r}
+# ========================================================
+# 1. 生成预测
+# ========================================================
+Pred11 <- predict(fit11) 
+
+# 因为 fit11 只包含 1月13日到3月25日的数据
+residuals_fit11 <- Pred11[[1]]$state$pred$Ti - Data_Subset$yTi1
+
+# ========================================================
+# 3. 准备绘图用的时间轴
+# ========================================================
+# 同样，Hour 也必须从 Data_Subset 里重新提取
+# 否则画出来的图横坐标会对不上
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# ========================================================
+# 4. 画图 (对比 Hour)
+# ========================================================
+plot(residuals_fit11 ~ Hour_subset, 
+     main = "Residuals (Jan 13 - Mar 25)", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便对比
+
+# 5. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+
+生成学生样条
+```{r}
+library(splines)
+
+# 1. 确保时间格式正确并切片 (你已经做过的步骤，确认一下)
+AllDat$date <- as.POSIXct(AllDat$date, tz="UTC") 
+start_date <- as.POSIXct("2015-01-13 00:00:00", tz="UTC")
+end_date   <- as.POSIXct("2015-03-25 23:59:59", tz="UTC")
+idx_subset <- which(AllDat$date >= start_date & AllDat$date <= end_date)
+Data_Subset <- AllDat[idx_subset, ]
+
+# 2. 提取小时数
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# 3. 定义学生在校时间段 (9:00 - 16:00)
+idx_occ_time <- (Hour_subset >= 9 & Hour_subset <= 16)
+
+# 4. 生成学生热量专用的样条 (df=5)
+# 这组样条只负责描述 9:00-16:00 期间的变化
+obs <- bs(Hour_subset[idx_occ_time], df=5, intercept=TRUE)
+
+# 5. 初始化全0向量
+obs1 <- obs2 <- obs3 <- obs4 <- obs5 <- numeric(nrow(Data_Subset))
+
+# 6. 填入数据
+obs1[idx_occ_time] = obs[,1]
+obs2[idx_occ_time] = obs[,2]
+obs3[idx_occ_time] = obs[,3]
+obs4[idx_occ_time] = obs[,4]
+obs5[idx_occ_time] = obs[,5]
+
+# 7. 存入 Data_Subset (注意：不是存入 AllDat，而是存入这个子集)
+Data_Subset$obs1 = obs1
+Data_Subset$obs2 = obs2
+Data_Subset$obs3 = obs3
+Data_Subset$obs4 = obs4
+Data_Subset$obs5 = obs5
+
+# 检查一下
+print(paste("Selected rows:", nrow(Data_Subset)))
+```
+
+```{r}
+sdeTiTm12 <- function(data, yTi, Ph){
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph + 
+      # 🔥 动态学生热量 (5个参数)
+      # 这是一个随时间变化的功率曲线，替代了原来的 Q_occ * Occupancy
+      (Q1*obs1 + Q2*obs2 + Q3*obs3 + Q4*obs4 + Q5*obs5) + 
+      # 太阳能样条 (保持原状)
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm 保持不变 (接收剩余暖气)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  # 记得把 obs1-obs5 加进去
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, obs1, obs2, obs3, obs4, obs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数 (锁住 Cm，防止崩塌)
+  model$setParameter(Ria = c(init=10.0, lb=9.9, ub=10.1)) 
+  model$setParameter(Cm  = c(init=52000, lb=51000, ub=53000))
+  model$setParameter(Ci  = c(init=7.0, lb=6.9, ub=7.1))
+  model$setParameter(Rim = c(init=0.42, lb=0.41, ub=0.43))
+  
+  # 🆕 学生热量样条系数 (Q1 - Q5)
+  # 范围允许负值 (-2 到 10 kW)，以防万一
+  model$setParameter(Q1 = c(init=1, lb=-2, ub=10)) # 早晨
+  model$setParameter(Q2 = c(init=2, lb=-2, ub=10)) # 上午高峰
+  model$setParameter(Q3 = c(init=1, lb=-2, ub=10)) # 午休
+  model$setParameter(Q4 = c(init=2, lb=-2, ub=10)) # 下午
+  model$setParameter(Q5 = c(init=1, lb=-2, ub=10)) # 放学
+
+  # 暖气分配
+  model$setParameter(p_ph = c(init=0.7, lb=0, ub=1))
+  
+  # 太阳参数 (ub=25)
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 5. 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+
+```{r}
+# 1. 运行模型 (传入 Data_Subset)
+fit12 <- sdeTiTm12(Data_Subset, Data_Subset$yTi1, Data_Subset$Ph1)
+
+# 2. 查看结果参数
+summary(fit12)
+```
+
+
+```{r}
+Pred12 <- predict(fit12) 
+
+# 因为 fit11 只包含 1月13日到3月25日的数据
+residuals_fit12 <- Pred12[[1]]$state$pred$Ti - Data_Subset$yTi1
+
+# ========================================================
+# 3. 准备绘图用的时间轴
+# ========================================================
+# 同样，Hour 也必须从 Data_Subset 里重新提取
+# 否则画出来的图横坐标会对不上
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# ========================================================
+# 4. 画图 (对比 Hour)
+# ========================================================
+plot(residuals_fit12 ~ Hour_subset, 
+     main = "Residuals (Jan 13 - Mar 25)", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便对比
+
+# 5. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+变好了一些，但是还不够好，下面我们用周末数据来建模Aw，然后锁死
+
+```{r}
+# 1. 确保你的 Data_Subset 里的 date 是时间格式
+# (如果你之前运行过切片代码，这一步通常已经好了)
+Data_Subset$date <- as.POSIXct(Data_Subset$date, tz="UTC")
+
+# 2. 计算星期几
+# format(..., "%u") 会返回数字：1=周一, ..., 6=周六, 7=周日
+Data_Subset$weekday_num <- as.numeric(format(Data_Subset$date, "%u"))
+
+# 3. 筛选出周末 (大于等于6，即周六和周日)
+Data_Weekend <- subset(Data_Subset, weekday_num >= 6)
+
+# --- 验证一下 ---
+# 看看是不是真的只选出了周六周日？
+print(unique(format(Data_Weekend$date, "%Y-%m-%d %A")))
+# 看看选出了多少行数据？
+print(paste("周末数据行数:", nrow(Data_Weekend)))
+```
+
+```{r}
+# 1. 确保你的 Data_Subset 里的 date 是时间格式
+sdeTiTm13 <- function(data, yTi, Ph){ 
+  # 不需要 Occupancy，因为周末默认没人
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  
+  # dTi (空气): 
+  # - 太阳能: 全部回归这里 (为了捕捉灵敏的太阳反应)
+  # - 暖气: p_ph 比例在这里
+  # - 学生: 无
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph + 
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体): 
+  # - 暖气: (1-p_ph) 比例在这里 (蓄热)
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  # 必须确保 data 里有 bs1-bs5
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 物理参数 (保持稳健设置)
+  model$setParameter(Ci  = c(init = 8.5,  lb = 1E-5, ub = 1E5))
+  model$setParameter(Cm  = c(init=130000, lb=50000, ub=200000)) # 锁住厚墙
+  model$setParameter(Ria = c(init=12,     lb=8,     ub=20))
+  model$setParameter(Rim = c(init=0.5,    lb=0.1,   ub=10))
+  
+  # 暖气分配
+  model$setParameter(p_ph = c(init=0.5, lb=0, ub=1))
+  
+  # 太阳参数 (Aw) - 如果撞墙严重可改 ub=30
+  model$setParameter(Aw1 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw2 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw3 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw4 = c(init=5, lb=0, ub=25))
+  model$setParameter(Aw5 = c(init=5, lb=0, ub=25))
+  
+  # 噪声
+  model$setParameter(p11 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(p22 = c(init = 1,  lb = -30, ub = 10))
+  model$setParameter(e11 = c(init = -1, lb = -50, ub = 10))
+
+  # --- 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+
+```{r}
+# 运行周末模型
+fit13 <- sdeTiTm13(Data_Weekend, Data_Weekend$yTi1, Data_Weekend$Ph1)
+
+# 查看结果
+summary(fit13)
+```
+
+
+
+```{r}
+# ========================================================
+# 1. 生成周末模型的预测值
+# ========================================================
+Pred13 <- predict(fit13)
+
+# ========================================================
+# 2. 计算残差 (关键：必须减去 Data_Weekend 的观测值)
+# ========================================================
+# 提取预测的 Ti
+y_pred_weekend <- Pred13[[1]]$state$pred$Ti
+
+# 计算残差
+residuals_13 <- y_pred_weekend - Data_Weekend$yTi1
+
+# ========================================================
+# 3. 提取周末的小时数 (用于横坐标)
+# ========================================================
+# 确保从 Data_Weekend 中提取时间
+Hour_weekend <- as.numeric(strftime(Data_Weekend$date, format="%H"))
+
+# ========================================================
+# 4. 画图：残差 vs 小时 (诊断日内规律)
+# ========================================================
+plot(residuals_13 ~ Hour_weekend, 
+     main = "Residuals on Weekends (No Students)", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (°C)",
+     col = "darkblue",        # 用深蓝色点
+     pch = 1,                 # 空心圆圈
+     ylim = c(-2, 2))         # 固定Y轴范围，方便观察
+
+# 加一条 0 线 (参考线)
+abline(h=0, col="red", lwd=2)
+
+# 加网格
+grid()
+```
+
+
+下面锁死太阳！
+```{r}
+sdeTiTm14 <- function(data, yTi, Ph){
+  # 注意：这里不需要传入 Occupancy 参数了，因为 obs1-obs5 已经在 data 里了
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph + 
+      # 🔥 动态学生热量 (开放估计)
+      (Q1*obs1 + Q2*obs2 + Q3*obs3 + Q4*obs4 + Q5*obs5) + 
+      # 🔒 太阳能样条 (参数将被锁死)
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  # 确保传入了 obs1-obs5 (学生) 和 bs1-bs5 (太阳)
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, obs1, obs2, obs3, obs4, obs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 (关键步骤！) ---
+  
+  # 状态初值 (保持宽范围)
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 🔒 【物理参数】: 填入周末模型的结果并锁死 (给予极小的浮动范围)
+  # Ci = 12.74
+  model$setParameter(Ci  = c(init = 12.74, lb = 12.73, ub = 12.75))
+  # Cm = 163180
+  model$setParameter(Cm  = c(init = 163180, lb = 163170, ub = 163190))
+  # Ria = 19.75
+  model$setParameter(Ria = c(init = 19.75, lb = 19.74, ub = 19.76))
+  # Rim = 0.46
+  model$setParameter(Rim = c(init = 0.465, lb = 0.46, ub = 0.47))
+  # p_ph = 0.987 (暖气几乎全是加热空气)
+  model$setParameter(p_ph = c(init = 0.987, lb = 0.98, ub = 1.0))
+  
+  # 🔒 【太阳参数】: 填入周末模型的结果并锁死
+  # Aw1 = 3.53
+  model$setParameter(Aw1 = c(init = 3.53, lb = 3.52, ub = 3.54))
+  # Aw2 = 4.96
+  model$setParameter(Aw2 = c(init = 4.96, lb = 4.95, ub = 4.97))
+  # Aw3 ≈ 0 (1.1e-12) -> 设为 0
+  model$setParameter(Aw3 = c(init = 0, lb = -0.01, ub = 0.01))
+  # Aw4 = 9.38
+  model$setParameter(Aw4 = c(init = 9.38, lb = 9.37, ub = 9.39))
+  # Aw5 ≈ 0 (7.3e-12) -> 设为 0
+  model$setParameter(Aw5 = c(init = 0, lb = -0.01, ub = 0.01))
+  
+  # 🔓 【学生热量参数】: 只有这些是开放的！让模型去猜！
+  model$setParameter(Q1 = c(init=1, lb=-5, ub=10)) # 09:00
+  model$setParameter(Q2 = c(init=1, lb=-5, ub=10)) # 10:30
+  model$setParameter(Q3 = c(init=1, lb=-5, ub=10)) # 12:00
+  model$setParameter(Q4 = c(init=1, lb=-5, ub=10)) # 13:30
+  model$setParameter(Q5 = c(init=1, lb=-5, ub=10)) # 15:00
+
+  # 噪声参数 (可以稍微放开一点，或者沿用)
+  model$setParameter(p11 = c(init = -9.7, lb = -20, ub = 0))
+  model$setParameter(p22 = c(init = -1.4, lb = -20, ub = 0))
+  model$setParameter(e11 = c(init = -5.6, lb = -20, ub = 0))
+
+  # --- 5. 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+
+```{r}
+# 1. 运行最终模型
+fit14 <- sdeTiTm14(Data_Subset, Data_Subset$yTi1, Data_Subset$Ph1)
+
+# 2. 查看结果
+summary(fit14)
+```
+
+
+```{r}
+Pred14 <- predict(fit14) 
+
+# 因为 fit11 只包含 1月13日到3月25日的数据
+residuals_fit14 <- Pred14[[1]]$state$pred$Ti - Data_Subset$yTi1
+
+# ========================================================
+# 3. 准备绘图用的时间轴
+# ========================================================
+# 同样，Hour 也必须从 Data_Subset 里重新提取
+# 否则画出来的图横坐标会对不上
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# ========================================================
+# 4. 画图 (对比 Hour)
+# ========================================================
+plot(residuals_fit14 ~ Hour_subset, 
+     main = "Residuals", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便对比
+
+# 5. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+```{r}
+# ========================================================
+# 5. 数值型评价指标计算 (Metrics Calculation)
+# ========================================================
+
+# 确保去除可能的 NA 值 (虽然 ctsm 处理得很好，但为了计算统计量最好清理一下)
+res_clean <- na.omit(residuals_fit14)
+
+# --- A. 误差指标 (越小越好) ---
+
+# 1. MSE (Mean Squared Error, 均方误差)
+# 含义：误差的平方的平均值，您专门点的指标
+mse <- mean(res_clean^2)
+
+# 2. RMSE (Root Mean Squared Error, 均方根误差)
+# 含义：MSE开根号。单位和温度一样(°C)，比MSE更直观
+rmse <- sqrt(mse)
+
+# 3. MAE (Mean Absolute Error, 平均绝对误差)
+# 含义：预测值平均偏离了多少度
+mae <- mean(abs(res_clean))
+
+# --- B. 模型选择指标 (越小越好) ---
+
+# 从 fit14 对象中提取关键信息
+nll <- fit14$loglik       # 负对数似然 (Negative Log-Likelihood)
+k   <- length(fit14$xm)   # 使用的参数数量
+n   <- length(res_clean)  # 样本数量
+
+# 4. AIC (赤池信息量)
+aic_val <- 2 * k + 2 * nll
+
+# 5. BIC (贝叶斯信息量)
+bic_val <- log(n) * k + 2 * nll
+
+# ========================================================
+# 6. 打印最终报告
+# ========================================================
+cat("\n===========================================\n")
+cat("       Model fit14 最终评估报告       \n")
+cat("===========================================\n")
+cat("--- 预测精度 (Error Metrics) ---\n")
+cat(sprintf("MSE  (均方误差)    : %.4f\n", mse))
+cat(sprintf("RMSE (均方根误差)  : %.4f °C\n", rmse))
+cat(sprintf("MAE  (平均绝对误差): %.4f °C\n", mae))
+cat("\n")
+cat("--- 模型拟合优度 (Model Selection) ---\n")
+cat(sprintf("AIC                : %.2f\n", aic_val))
+cat(sprintf("BIC                : %.2f\n", bic_val))
+cat(sprintf("Log-Likelihood     : %.2f\n", -nll)) # 转回正值显示
+cat("===========================================\n")
+
+# ========================================================
+# 7. (可选) 残差自相关检查 ACF
+# ========================================================
+# 检查模型是否还漏掉了什么规律
+acf(res_clean, lag.max = 24, main = "ACF of Residuals (fit14)")
+```
+
+
+是不是加上psolar更符合物理规律？
+```{r}
+sdeTiTm15 <- function(data, yTi, Ph){
+  # 传入数据列
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  
+  # dTi (空气): 
+  # - 太阳能: 现在只接收 p_solar 比例
+  # - 暖气: p_ph 比例
+  # - 学生: Q 全额 (动态样条)
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph + 
+      (Q1*obs1 + Q2*obs2 + Q3*obs3 + Q4*obs4 + Q5*obs5) + 
+      # 🔥 修改点：乘以 p_solar
+      p_solar * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  # dTm (墙体): 
+  # - 暖气: (1-p_ph) 比例
+  # - 太阳能: 接收剩余的 (1-p_solar) 比例
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph +
+      # 🔥 修改点：增加太阳能项 (1-p_solar)
+      (1 - p_solar) * (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, obs1, obs2, obs3, obs4, obs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 ---
+  
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 🔒 【物理参数】(保持锁死)
+  model$setParameter(Ci  = c(init = 12.74, lb = 12.73, ub = 12.75))
+  model$setParameter(Cm  = c(init = 163180, lb = 163170, ub = 163190))
+  model$setParameter(Ria = c(init = 19.75, lb = 19.74, ub = 19.76))
+  model$setParameter(Rim = c(init = 0.465, lb = 0.46, ub = 0.47))
+  model$setParameter(p_ph = c(init = 0.987, lb = 0.98, ub = 1.0))
+  
+  # 🆕 【新增参数】：p_solar (太阳能分配比例)
+  # 范围 0-1。通常大部分进墙 (p较小)，但也可能进空气多。
+  # 这里先开放让它自己算，看看结果如何。
+  model$setParameter(p_solar = c(init = 0.2, lb = 0, ub = 1))
+  
+  # 🔒 【太阳参数 Aw】(保持锁死)
+  # 注意：因为之前的 Aw 是假设 100% 进空气算出来的。
+  # 现在改变了物理结构，这些 Aw 值可能稍微有点“不匹配”，但作为第一步尝试是可以的。
+  model$setParameter(Aw1 = c(init = 3.53, lb = 3.52, ub = 3.54))
+  model$setParameter(Aw2 = c(init = 4.96, lb = 4.95, ub = 4.97))
+  model$setParameter(Aw3 = c(init = 0, lb = -0.01, ub = 0.01))
+  model$setParameter(Aw4 = c(init = 9.38, lb = 9.37, ub = 9.39))
+  model$setParameter(Aw5 = c(init = 0, lb = -0.01, ub = 0.01))
+  
+  # 🔓 【学生热量 Q】(开放估计)
+  model$setParameter(Q1 = c(init=1, lb=-5, ub=10))
+  model$setParameter(Q2 = c(init=1, lb=-5, ub=10))
+  model$setParameter(Q3 = c(init=1, lb=-5, ub=10))
+  model$setParameter(Q4 = c(init=1, lb=-5, ub=10))
+  model$setParameter(Q5 = c(init=1, lb=-5, ub=10))
+
+  # 噪声参数
+  model$setParameter(p11 = c(init = -9.7, lb = -20, ub = 0))
+  model$setParameter(p22 = c(init = -1.4, lb = -20, ub = 0))
+  model$setParameter(e11 = c(init = -5.6, lb = -20, ub = 0))
+
+  # --- 5. 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit15 <- sdeTiTm15(Data_Subset, Data_Subset$yTi1, Data_Subset$Ph1)
+
+# 2. 查看结果
+summary(fit15)
+```
+
+```{r}
+Pred15 <- predict(fit15) 
+
+# 因为 fit11 只包含 1月13日到3月25日的数据
+residuals_fit15 <- Pred15[[1]]$state$pred$Ti - Data_Subset$yTi1
+
+# ========================================================
+# 3. 准备绘图用的时间轴
+# ========================================================
+# 同样，Hour 也必须从 Data_Subset 里重新提取
+# 否则画出来的图横坐标会对不上
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# ========================================================
+# 4. 画图 (对比 Hour)
+# ========================================================
+plot(residuals_fit15 ~ Hour_subset, 
+     main = "Residuals ", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便对比
+
+# 5. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+```{r}
+Sys.setlocale("LC_TIME", "English")
+library(ggplot2)
+
+# 定义假期时间段 (用来画背景阴影)
+rects <- data.frame(
+  xmin = as.POSIXct(c("2014-12-22", "2015-04-01")),
+  xmax = as.POSIXct(c("2015-01-12", "2015-04-30")),
+  ymin = -Inf,
+  ymax = Inf
+)
+
+ggplot(AllDat, aes(x = date, y = yTi1)) +
+  # 1. 添加假期阴影区域 (红色半透明)
+  geom_rect(data = rects, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+            inherit.aes = FALSE, fill = "red", alpha = 0.2) +
+  # 2. 画温度曲线
+  geom_line(color = "black", size = 0.3) +
+  # 3. 添加文字标注 (可选)
+  annotate("text", x = as.POSIXct("2015-01-01"), y = 25, label = "Winter Break", color = "red") +
+  annotate("text", x = as.POSIXct("2015-04-10"), y = 25, label = "Easter Break", color = "red") +
+  # 4. 设置坐标轴和标题
+  labs(title = "Indoor Temperature (Room 1) Over Time",
+       subtitle = "Highlighted regions show periods with no students (holidays)",
+       x = "Date",
+       y = "Temperature (°C)") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+
+
+
+下面把e11锁死在-5到-6之间
+
+```{r}
+sdeTiTm16 <- function(data, yTi, Ph){
+  # 注意：这里不需要传入 Occupancy 参数了，因为 obs1-obs5 已经在 data 里了
+  data$yTi <- yTi
+  data$Ph  <- Ph
+  
+  model <- ctsm()
+  
+  # --- 1. 系统方程 ---
+  model$addSystem(dTi ~ 1/Ci * ( 
+      1/Ria*(Ta-Ti) + 
+      1/Rim*(Tm-Ti) + 
+      p_ph * Ph + 
+      # 🔥 动态学生热量 (开放估计)
+      (Q1*obs1 + Q2*obs2 + Q3*obs3 + Q4*obs4 + Q5*obs5) + 
+      # 🔒 太阳能样条 (参数将被锁死)
+      (Aw1*bs1 + Aw2*bs2 + Aw3*bs3 + Aw4*bs4 + Aw5*bs5) * Gv 
+    )*dt + exp(p11)*dw1)
+  
+  model$addSystem(dTm ~ 1/Cm * ( 
+      1/Rim*(Ti-Tm) + 
+      (1 - p_ph) * Ph
+    )*dt + exp(p22)*dw2)
+  
+  # --- 2. 输入变量 ---
+  # 确保传入了 obs1-obs5 (学生) 和 bs1-bs5 (太阳)
+  model$addInput(Ta, Gv, Ph, bs1, bs2, bs3, bs4, bs5, obs1, obs2, obs3, obs4, obs5)
+  
+  # --- 3. 观测方程 ---
+  model$addObs(yTi ~ Ti)
+  model$setVariance(yTi ~ exp(e11))
+  
+  # --- 4. 参数设置 (关键步骤！) ---
+  
+  # 状态初值 (保持宽范围)
+  model$setParameter(Ti = c(init = 15, lb = 0, ub = 40))
+  model$setParameter(Tm = c(init = 15, lb = 0, ub = 40))
+  
+  # 🔒 【物理参数】: 填入周末模型的结果并锁死 (给予极小的浮动范围)
+  # Ci = 12.74
+  model$setParameter(Ci  = c(init = 12.74, lb = 12.73, ub = 12.75))
+  # Cm = 163180
+  model$setParameter(Cm  = c(init = 163180, lb = 163170, ub = 163190))
+  # Ria = 19.75
+  model$setParameter(Ria = c(init = 19.75, lb = 19.74, ub = 19.76))
+  # Rim = 0.46
+  model$setParameter(Rim = c(init = 0.465, lb = 0.46, ub = 0.47))
+  # p_ph = 0.987 (暖气几乎全是加热空气)
+  model$setParameter(p_ph = c(init = 0.987, lb = 0.98, ub = 1.0))
+  
+  # 🔒 【太阳参数】: 填入周末模型的结果并锁死
+  # Aw1 = 3.53
+  model$setParameter(Aw1 = c(init = 3.53, lb = 3.52, ub = 3.54))
+  # Aw2 = 4.96
+  model$setParameter(Aw2 = c(init = 4.96, lb = 4.95, ub = 4.97))
+  # Aw3 ≈ 0 (1.1e-12) -> 设为 0
+  model$setParameter(Aw3 = c(init = 0, lb = -0.01, ub = 0.01))
+  # Aw4 = 9.38
+  model$setParameter(Aw4 = c(init = 9.38, lb = 9.37, ub = 9.39))
+  # Aw5 ≈ 0 (7.3e-12) -> 设为 0
+  model$setParameter(Aw5 = c(init = 0, lb = -0.01, ub = 0.01))
+  
+  # 🔓 【学生热量参数】: 只有这些是开放的！让模型去猜！
+  model$setParameter(Q1 = c(init=1, lb=-5, ub=10)) # 09:00
+  model$setParameter(Q2 = c(init=1, lb=-5, ub=10)) # 10:30
+  model$setParameter(Q3 = c(init=1, lb=-5, ub=10)) # 12:00
+  model$setParameter(Q4 = c(init=1, lb=-5, ub=10)) # 13:30
+  model$setParameter(Q5 = c(init=1, lb=-5, ub=10)) # 15:00
+
+  # 噪声参数 (可以稍微放开一点，或者沿用)
+  model$setParameter(p11 = c(init = -9.7, lb = -20, ub = 0))
+  model$setParameter(p22 = c(init = -1.4, lb = -20, ub = 0))
+  model$setParameter(e11 = c(init = -5.6, lb = -6, ub = -5))
+
+  # --- 5. 运行 ---
+  capture.output(fit <- model$estimate(data, firstorder = TRUE), file = NULL)
+  return(fit)
+}
+```
+
+
+```{r}
+fit16 <- sdeTiTm16(Data_Subset, Data_Subset$yTi1, Data_Subset$Ph1)
+
+# 2. 查看结果
+summary(fit16)
+```
+
+
+
+
+```{r}
+Pred16 <- predict(fit16) 
+
+# 因为 fit11 只包含 1月13日到3月25日的数据
+residuals_fit16 <- Pred15[[1]]$state$pred$Ti - Data_Subset$yTi1
+
+# ========================================================
+# 3. 准备绘图用的时间轴
+# ========================================================
+# 同样，Hour 也必须从 Data_Subset 里重新提取
+# 否则画出来的图横坐标会对不上
+Hour_subset <- as.numeric(strftime(Data_Subset$date, format="%H"))
+
+# ========================================================
+# 4. 画图 (对比 Hour)
+# ========================================================
+plot(residuals_fit16 ~ Hour_subset, 
+     main = "Residuals ", 
+     xlab = "Hour of Day",
+     ylab = "Prediction Error (C)",
+     ylim = c(-3, 3)) # 固定坐标轴范围，方便对比
+
+# 5. 加一条 0 线方便观察
+abline(h=0, col="red", lwd=2)
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
