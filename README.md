@@ -8,7 +8,7 @@ This repository includes **Part 2 (single-room)** and **Part 3 (multi-room)** co
 The dataset contains indoor temperatures (4 rooms) and exogenous drivers such as ambient temperature, solar radiation, and heating power.
 See `data/README.md` for access notes and variable definitions.
 
-## Part 2 — Single-Room Model (My Main Contribution)
+## Part 2 — Single-Room Model
 **Goal:** build an interpretable 2-state model for Room 1 and improve fit via diagnostics-driven refinement.
 
 - Baseline **2-state** model: indoor air temperature (`Ti`) + thermal mass (`Tm`)  
@@ -21,7 +21,7 @@ See `data/README.md` for access notes and variable definitions.
 
 **Takeaway:** solar variation alone could not explain the morning bias; adding an occupancy disturbance produced a more stable and physically plausible model.
 
-## Part 3 — Multi-Room Model (Team Extension)
+## Part 3 — Multi-Room Model 
 **Goal:** extend to a coupled building model capturing room interactions.
 
 - Built a **6-state** SDE model (4 rooms + 2 wall thermal masses) estimated with **EKF**
@@ -30,10 +30,10 @@ See `data/README.md` for access notes and variable definitions.
 
 **Key finding:** the model recovers clear solar asymmetry (`Aws > Awn`) and meaningful inter-room coupling, while Room 1 still shows residual structure likely due to unobserved occupancy/ventilation effects.
 
-## My Contribution
+## Contribution
 Team project:
-- **I led Part 2 (single-room modeling, diagnostics, refinement, and interpretation).**
-- My teammate primarily contributed **Part 3 (multi-room 6-state model design/estimation).**
+- **Rujia Li led Part 2 (single-room modeling, diagnostics, refinement, and interpretation).**
+- Xinxu Yao primarily contributed **Part 3 (multi-room 6-state model design/estimation).**
 
 ## Repo Structure
 ```text
